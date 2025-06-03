@@ -1,0 +1,14 @@
+# Build artifacts
+obj/
+*.o
+*.out
+falling_sand
+
+# Editor-specific files
+.vscode/
+*.swp
+*.swo
+
+# OS-specific files
+.DS_Store
+Thumbs.db
