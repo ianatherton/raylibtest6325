@@ -1,6 +1,7 @@
 #include "raylib.h"
 #include <stdlib.h> // For GetRandomValue
 #include <stdio.h>  // For sprintf
+#include <stdbool.h> // For bool type
 
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 600
@@ -16,12 +17,14 @@ typedef enum {
 } CellType;
 
 CellType grid[GRID_HEIGHT][GRID_WIDTH];
+CellType nextGrid[GRID_HEIGHT][GRID_WIDTH]; // Double buffer to prevent processing moved particles multiple times
 CellType currentBrushType = SAND;
 
 void InitGrid(void) {
     for (int y = 0; y < GRID_HEIGHT; y++) {
         for (int x = 0; x < GRID_WIDTH; x++) {
             grid[y][x] = EMPTY;
+            nextGrid[y][x] = EMPTY;
         }
     }
 }
@@ -58,6 +61,13 @@ int main(void)
             }
         }
 
+        // Copy current grid to next grid for double buffering
+        for (int y = 0; y < GRID_HEIGHT; y++) {
+            for (int x = 0; x < GRID_WIDTH; x++) {
+                nextGrid[y][x] = grid[y][x];
+            }
+        }
+        
         // Simulate particle physics
         for (int y = GRID_HEIGHT - 2; y >= 0; y--) { // Iterate from bottom-up
             for (int x = 0; x < GRID_WIDTH; x++) { // Iterate columns (can alternate direction for more natural flow)
@@ -67,81 +77,107 @@ int main(void)
                     if (nextY < GRID_HEIGHT) { // Ensure not at bottom row
                         // Attempt 1: Move/Swap straight down
                         if (grid[nextY][x] == EMPTY) {
-                            grid[nextY][x] = SAND;
-                            grid[y][x] = EMPTY;
+                            nextGrid[nextY][x] = SAND;
+                            nextGrid[y][x] = EMPTY;
                         } else if (grid[nextY][x] == WATER) {
-                            grid[nextY][x] = SAND; // Sand takes water's spot
-                            grid[y][x] = WATER;  // Water moves to sand's original spot (swap)
+                            // Sand displaces water (swap positions)
+                            nextGrid[nextY][x] = SAND;
+                            nextGrid[y][x] = WATER;
                         } else { // Blocked by SAND or other, try diagonal
                             // Attempt 2: Move/Swap diagonally down
                             int diagLeftX = x - 1;
                             int diagRightX = x + 1;
 
-                            // Check potential diagonal destinations (can be EMPTY or WATER)
-                            bool canGoLeft = (diagLeftX >= 0 && (grid[nextY][diagLeftX] == EMPTY || grid[nextY][diagLeftX] == WATER));
-                            bool canGoRight = (diagRightX < GRID_WIDTH && (grid[nextY][diagRightX] == EMPTY || grid[nextY][diagRightX] == WATER));
-
-                            if (canGoLeft && canGoRight) { // Both directions possible
-                                if (GetRandomValue(0, 1) == 0) { // Choose left
-                                    CellType particleInTarget = grid[nextY][diagLeftX];
-                                    grid[nextY][diagLeftX] = SAND; // Sand moves to target
-                                    grid[y][x] = particleInTarget; // Original spot gets what was in target (EMPTY or WATER)
-                                } else { // Choose right
-                                    CellType particleInTarget = grid[nextY][diagRightX];
-                                    grid[nextY][diagRightX] = SAND;
-                                    grid[y][x] = particleInTarget;
+                            // Randomize direction choice for more natural movement
+                            bool tryLeftFirst = GetRandomValue(0, 1) == 0;
+                            int firstX = tryLeftFirst ? diagLeftX : diagRightX;
+                            int secondX = tryLeftFirst ? diagRightX : diagLeftX;
+                            
+                            // Try first diagonal direction
+                            if (firstX >= 0 && firstX < GRID_WIDTH) {
+                                if (grid[nextY][firstX] == EMPTY) {
+                                    nextGrid[nextY][firstX] = SAND;
+                                    nextGrid[y][x] = EMPTY;
+                                    continue;
+                                } else if (grid[nextY][firstX] == WATER) {
+                                    nextGrid[nextY][firstX] = SAND;
+                                    nextGrid[y][x] = WATER;
+                                    continue;
                                 }
-                            } else if (canGoLeft) { // Only left possible
-                                CellType particleInTarget = grid[nextY][diagLeftX];
-                                grid[nextY][diagLeftX] = SAND;
-                                grid[y][x] = particleInTarget;
-                            } else if (canGoRight) { // Only right possible
-                                CellType particleInTarget = grid[nextY][diagRightX];
-                                grid[nextY][diagRightX] = SAND;
-                                grid[y][x] = particleInTarget;
                             }
-                            // If neither diagonal move is possible, sand stays put.
+                            
+                            // Try second diagonal direction
+                            if (secondX >= 0 && secondX < GRID_WIDTH) {
+                                if (grid[nextY][secondX] == EMPTY) {
+                                    nextGrid[nextY][secondX] = SAND;
+                                    nextGrid[y][x] = EMPTY;
+                                } else if (grid[nextY][secondX] == WATER) {
+                                    nextGrid[nextY][secondX] = SAND;
+                                    nextGrid[y][x] = WATER;
+                                }
+                            }
+                            // If neither diagonal move is possible, sand stays put
                         }
                     }
                 } else if (grid[y][x] == WATER) {
-                    // 1. Try to move down
-                    if (y + 1 < GRID_HEIGHT && grid[y+1][x] == EMPTY) {
-                        grid[y+1][x] = WATER;
-                        grid[y][x] = EMPTY;
-                    } else {
-                        // 2. Try to move diagonally down
-                        bool canFallLeft = (y + 1 < GRID_HEIGHT && x > 0 && grid[y+1][x-1] == EMPTY);
-                        bool canFallRight = (y + 1 < GRID_HEIGHT && x < GRID_WIDTH - 1 && grid[y+1][x+1] == EMPTY);
-
-                        if (canFallLeft && canFallRight) {
-                            if (GetRandomValue(0, 1) == 0) grid[y+1][x-1] = WATER;
-                            else grid[y+1][x+1] = WATER;
-                            grid[y][x] = EMPTY;
-                        } else if (canFallLeft) {
-                            grid[y+1][x-1] = WATER;
-                            grid[y][x] = EMPTY;
-                        } else if (canFallRight) {
-                            grid[y+1][x+1] = WATER;
-                            grid[y][x] = EMPTY;
+                    // Only process water if it hasn't been affected by sand in this frame
+                    if (nextGrid[y][x] == WATER) {
+                        // 1. Try to move down
+                        if (y + 1 < GRID_HEIGHT && grid[y+1][x] == EMPTY && nextGrid[y+1][x] == EMPTY) {
+                            nextGrid[y+1][x] = WATER;
+                            nextGrid[y][x] = EMPTY;
                         } else {
-                            // 3. Try to move horizontally
-                            bool canFlowLeft = (x > 0 && grid[y][x-1] == EMPTY);
-                            bool canFlowRight = (x < GRID_WIDTH - 1 && grid[y][x+1] == EMPTY);
+                            // 2. Try to move diagonally down
+                            bool canFallLeft = (y + 1 < GRID_HEIGHT && x > 0 && 
+                                               grid[y+1][x-1] == EMPTY && nextGrid[y+1][x-1] == EMPTY);
+                            bool canFallRight = (y + 1 < GRID_HEIGHT && x < GRID_WIDTH - 1 && 
+                                                grid[y+1][x+1] == EMPTY && nextGrid[y+1][x+1] == EMPTY);
 
-                            if (canFlowLeft && canFlowRight) {
-                                if (GetRandomValue(0, 1) == 0) grid[y][x-1] = WATER;
-                                else grid[y][x+1] = WATER;
-                                grid[y][x] = EMPTY;
-                            } else if (canFlowLeft) {
-                                grid[y][x-1] = WATER;
-                                grid[y][x] = EMPTY;
-                            } else if (canFlowRight) {
-                                grid[y][x+1] = WATER;
-                                grid[y][x] = EMPTY;
+                            if (canFallLeft && canFallRight) {
+                                int direction = GetRandomValue(0, 1);
+                                if (direction == 0) {
+                                    nextGrid[y+1][x-1] = WATER;
+                                } else {
+                                    nextGrid[y+1][x+1] = WATER;
+                                }
+                                nextGrid[y][x] = EMPTY;
+                            } else if (canFallLeft) {
+                                nextGrid[y+1][x-1] = WATER;
+                                nextGrid[y][x] = EMPTY;
+                            } else if (canFallRight) {
+                                nextGrid[y+1][x+1] = WATER;
+                                nextGrid[y][x] = EMPTY;
+                            } else {
+                                // 3. Try to move horizontally
+                                bool canFlowLeft = (x > 0 && grid[y][x-1] == EMPTY && nextGrid[y][x-1] == EMPTY);
+                                bool canFlowRight = (x < GRID_WIDTH - 1 && grid[y][x+1] == EMPTY && nextGrid[y][x+1] == EMPTY);
+
+                                if (canFlowLeft && canFlowRight) {
+                                    int direction = GetRandomValue(0, 1);
+                                    if (direction == 0) {
+                                        nextGrid[y][x-1] = WATER;
+                                    } else {
+                                        nextGrid[y][x+1] = WATER;
+                                    }
+                                    nextGrid[y][x] = EMPTY;
+                                } else if (canFlowLeft) {
+                                    nextGrid[y][x-1] = WATER;
+                                    nextGrid[y][x] = EMPTY;
+                                } else if (canFlowRight) {
+                                    nextGrid[y][x+1] = WATER;
+                                    nextGrid[y][x] = EMPTY;
+                                }
                             }
                         }
                     }
                 }
+            }
+        }
+        
+        // Swap the grids (update the current grid to the next state)
+        for (int y = 0; y < GRID_HEIGHT; y++) {
+            for (int x = 0; x < GRID_WIDTH; x++) {
+                grid[y][x] = nextGrid[y][x];
             }
         }
         //----------------------------------------------------------------------------------
